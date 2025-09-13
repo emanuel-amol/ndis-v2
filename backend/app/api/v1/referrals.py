@@ -1,9 +1,10 @@
-# backend/app/api/v1/referrals.py
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List  # <-- needed for annotations
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -12,111 +13,80 @@ from app.schemas.referral import ReferralCreate, ReferralResponse, ReferralUpdat
 from app.services.referral_service import ReferralService
 from app.services.email_service import EmailService
 from app.models.user import User, UserRole, get_providers_for_service, get_admins
+from app.models.referral import Referral  # <-- import the ORM model
 
 router = APIRouter()
+log = logging.getLogger(__name__)  # <-- used by .exception() calls
+
+
+def orm_to_response(r: Referral) -> ReferralResponse:
+    """Map ORM -> Pydantic (Pydantic v2)."""
+    return ReferralResponse.model_validate(r, from_attributes=True)
 
 
 def get_provider_emails_for_referral(referral, db: Session) -> List[str]:
     """
     Get provider emails based on referral type from database
-    
-    Args:
-        referral: The referral object
-        db: Database session
-        
-    Returns:
-        List of provider email addresses from database
     """
-    provider_emails = []
-    
+    provider_emails: List[str] = []
     try:
-        # Get all admin emails (always included)
         admins = get_admins(db)
         admin_emails = [admin.email for admin in admins if admin.email]
         provider_emails.extend(admin_emails)
-        print(f"Found {len(admin_emails)} admin emails: {admin_emails}")
-        
-        # Get providers who can handle this service type
-        service_type = referral.referred_for.lower() if hasattr(referral, 'referred_for') and referral.referred_for else 'general'
-        print(f"Looking for providers for service type: '{service_type}'")
-        
+
+        service_type = (
+            referral.referred_for.lower()
+            if hasattr(referral, "referred_for") and referral.referred_for
+            else "general"
+        )
         providers = get_providers_for_service(db, service_type)
-        provider_specific_emails = [provider.email for provider in providers if provider.email]
+        provider_specific_emails = [p.email for p in providers if p.email]
         provider_emails.extend(provider_specific_emails)
-        print(f"Found {len(providers)} specific providers for {service_type}")
-        print(f"Provider emails from database: {provider_specific_emails}")
-        
-        # If no specific providers found, get all active providers as fallback
+
         if not providers:
-            print(f"No specific providers found for {service_type}, getting all active providers")
-            all_providers = db.query(User).filter(
-                User.role == UserRole.PROVIDER,
-                User.is_active == True,
-                User.email.isnot(None)
-            ).all()
-            provider_emails.extend([provider.email for provider in all_providers if provider.email])
-            print(f"Fallback: Found {len(all_providers)} total active providers")
-        
-        # Remove duplicates and return
-        unique_emails = list(set(provider_emails))
-        print(f"Final result: {len(unique_emails)} unique provider emails: {unique_emails}")
-        return unique_emails
-        
-    except Exception as e:
-        print(f"Error fetching provider emails from database: {str(e)}")
-        # Fallback to your email if database query fails
-        return ["vanshikasmriti024@gmail.com"]  # Fallback email
+            all_providers = (
+                db.query(User)
+                .filter(
+                    User.role == UserRole.PROVIDER,
+                    User.is_active == True,  # noqa: E712
+                    User.email.isnot(None),
+                )
+                .all()
+            )
+            provider_emails.extend([p.email for p in all_providers if p.email])
+
+        return list(set(provider_emails))  # de-dup
+    except Exception:
+        # Fallback address if DB lookup fails
+        return ["vanshikasmriti024@gmail.com"]
+
 
 @router.post("/referral", response_model=ReferralResponse, status_code=status.HTTP_201_CREATED)
-async def submit_referral(
-    referral_data: ReferralCreate,
-    db: Session = Depends(get_db)
-):
+async def submit_referral(referral_data: ReferralCreate, db: Session = Depends(get_db)):
     """
-    Submit a new referral form (Public endpoint - no authentication required)
-    This endpoint is used by the public referral form.
+    Public endpoint: submit a new referral form
     """
     try:
-        print(f"Received referral data: {referral_data}")
-        # Create the referral
         referral = ReferralService.create_referral(db, referral_data)
-        
-        # Send email notifications directly (no Celery)
+
         try:
-            # Get provider emails from database/login system
             provider_emails = get_provider_emails_for_referral(referral, db)
-            
-            # Initialize email service
             email_service = EmailService()
-            
             if email_service.is_configured():
-                # Send participant confirmation email
-                participant_result = await email_service.send_participant_confirmation(referral)
-                print(f"Participant confirmation email {'sent' if participant_result else 'failed'} for referral #{referral.id}")
-                
-                # Send provider notification emails
-                provider_result = await email_service.send_provider_notification(referral, provider_emails)
-                print(f"Provider notification email {'sent' if provider_result else 'failed'} for referral #{referral.id} to {len(provider_emails)} providers")
-            else:
-                print(f"Warning: Email service not configured, skipping notifications for referral #{referral.id}")
-            
-        except Exception as email_error:
-            # Log email error but don't fail the referral submission
-            print(f"Warning: Failed to send email notifications for referral #{referral.id}: {str(email_error)}")
-            import traceback
-            traceback.print_exc()
-        
-        return referral
+                await email_service.send_participant_confirmation(referral)
+                await email_service.send_provider_notification(referral, provider_emails)
+        except Exception:
+            # Log but do not fail the submission
+            log.exception("Failed to send email notifications for referral %s", getattr(referral, "id", "?"))
+
+        return orm_to_response(referral)
     except Exception as e:
-        print(f"Error creating referral: {str(e)}")
-        print(f"Error type: {type(e)}")
-        import traceback
-        traceback.print_exc()
+        log.exception("Error creating referral")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error creating referral: {str(e)}"
+            detail=f"Error creating referral: {e}",
         )
->>>>>>> 4a06c125fed08545b04515192bc98ba4064d7f3a
+
 
 @router.get(
     "/referrals",
@@ -127,6 +97,7 @@ async def submit_referral(
 def get_referrals(db: Session = Depends(get_db)) -> list[ReferralResponse]:
     rows = db.query(Referral).order_by(Referral.created_at.desc()).all()
     return [orm_to_response(r) for r in rows]
+
 
 @router.get(
     "/referrals/{referral_id}",
@@ -139,6 +110,7 @@ def get_referral(referral_id: str, db: Session = Depends(get_db)) -> ReferralRes
     if not r:
         raise HTTPException(status_code=404, detail="Referral not found")
     return orm_to_response(r)
+
 
 @router.put(
     "/referrals/{referral_id}",
@@ -187,6 +159,7 @@ def update_referral(referral_id: str, body: ReferralUpdate, db: Session = Depend
         db.rollback()
         log.exception("Update referral failed")
         raise HTTPException(status_code=500, detail=f"Referral update failed: {e!s}")
+
 
 @router.delete(
     "/referrals/{referral_id}",

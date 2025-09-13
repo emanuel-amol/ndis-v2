@@ -1,64 +1,60 @@
-# backend/app/main.py
+# app/main.py
+from __future__ import annotations
+
+import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
-import logging, traceback
 
-# Database imports
 from app.core.database import Base, engine
-# Import API routers
 from app.api.v1.api import api_router
-from app.api.v1 import dynamic_data
 
-# Create FastAPI app
-app = FastAPI(
-    title="NDIS Management System",
-    description="AI-Integrated NDIS Provider Management Platform",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    debug=True,
-)
 
-# CORS middleware for frontend
+app = FastAPI(title="NDIS API", version="1.0.0")
+
+# CORS (adjust origins as needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=["*"],  # change to specific domains in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Middleware to log unhandled exceptions
+
+# Simple error logging middleware
 @app.middleware("http")
 async def log_exceptions(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception as e:
         logging.error("UNHANDLED ERROR: %s", e, exc_info=True)
-        traceback.print_exc()
         raise
 
-# Startup event: create DB tables if they don't exist
+
 @app.on_event("startup")
-def create_tables():
-    # Import models so they're registered with SQLAlchemy Base.metadata
-    from app.models import referral, dynamic_data
+def create_tables() -> None:
+    """
+    Ensure all model modules are imported so SQLAlchemy can configure
+    relationships (especially string-based ones) before create_all().
+    """
+    # Import submodules so mappers are registered
+    # If you have a User model, import it too so back_populates resolves.
+    try:
+        from app.models import user  # noqa: F401
+    except Exception:
+        # It's fine if there's no user model
+        pass
+
+    from app.models import referral as _referral  # noqa: F401
+    from app.models import email_log as _email_log  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
 
-# Include API routes
+
+# Mount API router
 app.include_router(api_router, prefix="/api/v1")
-app.include_router(dynamic_data.router, prefix="/api/v1/dynamic-data", tags=["dynamic-data"])
 
-# Health check endpoint
-@app.get("/")
-async def root():
-    return {"message": "NDIS Management System API", "status": "running"}
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now()}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug")
+@app.get("/healthz")
+def healthcheck():
+    return {"status": "ok"}
