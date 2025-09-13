@@ -38,6 +38,9 @@ export default function App() {
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<Login />} />
 
+        {/* Public referral form - no authentication required */}
+        <Route path="/referral" element={<NDISReferralForm />} />
+
         {/* Dashboards by role */}
         <Route
           path="/admin"
@@ -82,7 +85,17 @@ export default function App() {
           }
         />
 
-        {/* Referrals */}
+        {/* Admin-specific routes */}
+        <Route
+          path="/admin/dynamic-data"
+          element={
+            <RequireRole role="admin">
+              <DynamicData />
+            </RequireRole>
+          }
+        />
+
+        {/* Referrals - Protected */}
         <Route
           path="/participants/referral/new"
           element={
@@ -92,7 +105,7 @@ export default function App() {
           }
         />
 
-        {/* Participants & profile */}
+        {/* Participants & profile - Protected */}
         <Route
           path="/participants"
           element={
@@ -110,7 +123,7 @@ export default function App() {
           }
         />
 
-        {/* Provider referral dashboard (participants/provider page) */}
+        {/* Provider referral dashboard (participants/provider page) - Protected */}
         <Route
           path="/participants/provider"
           element={
@@ -120,7 +133,7 @@ export default function App() {
           }
         />
 
-        {/* Documents */}
+        {/* Documents - Protected */}
         <Route
           path="/documents"
           element={
@@ -130,7 +143,7 @@ export default function App() {
           }
         />
 
-        {/* SIL Homes */}
+        {/* SIL Homes - Protected */}
         <Route
           path="/sil-homes"
           element={
@@ -140,7 +153,7 @@ export default function App() {
           }
         />
 
-        {/* Care flow */}
+        {/* Care flow - Protected */}
         <Route
           path="/care/setup/:participantId"
           element={
